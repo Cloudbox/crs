@@ -43,6 +43,7 @@ func (c *Client) Save(g *gin.Context) {
 	}
 
 	// receive file
+	g.Request.Body = http.MaxBytesReader(g.Writer, g.Request.Body, c.maxFileSize*1024)
 	file, err := g.FormFile("file")
 	if err != nil {
 		g.AbortWithError(http.StatusBadRequest, fmt.Errorf("file receive: %w", err))
