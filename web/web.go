@@ -1,10 +1,12 @@
 package web
 
 import (
+	"errors"
 	"github.com/Cloudbox/crs/logger"
 	"github.com/dustin/go-humanize"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
+	"io"
 	"strings"
 	"time"
 )
@@ -48,7 +50,7 @@ func New(c *Config, uploadDirectory string) *Client {
 func (c *Client) SetHandlers(r *gin.Engine) {
 	// core
 	r.GET("/load/:hash/:filename", c.WithErrorResponse(c.Load))
-	r.POST("/save/:hash/:filename", c.WithErrorResponse(c.Save))
+	r.POST("/save/:hash/:filename", c.WithErrorResponse(c.WithRequestSizeLimit(c.Save, c.maxFileSize*1024)))
 }
 
 func (c *Client) Logger() gin.HandlerFunc {
@@ -115,5 +117,79 @@ func (c Client) WithErrorResponse(next func(*gin.Context)) gin.HandlerFunc {
 				Error:   true,
 			})
 		}
+	}
+}
+
+type maxBytesReader struct {
+	ctx        *gin.Context
+	rdr        io.ReadCloser
+	remaining  int64
+	wasAborted bool
+	sawEOF     bool
+}
+
+func (mbr *maxBytesReader) tooLarge() (n int, err error) {
+	n, err = 0, errors.New("request body too large")
+
+	if !mbr.wasAborted {
+		mbr.wasAborted = true
+		mbr.ctx.Header("connection", "close")
+	}
+	return
+}
+
+func (mbr *maxBytesReader) Read(p []byte) (n int, err error) {
+	toRead := mbr.remaining
+	if mbr.remaining == 0 {
+		if mbr.sawEOF {
+			return mbr.tooLarge()
+		}
+		// The underlying io.Reader may not return (0, io.EOF)
+		// at EOF if the requested size is 0, so read 1 byte
+		// instead. The io.Reader docs are a bit ambiguous
+		// about the return value of Read when 0 bytes are
+		// requested, and {bytes,strings}.Reader gets it wrong
+		// too (it returns (0, nil) even at EOF).
+		toRead = 1
+	}
+	if int64(len(p)) > toRead {
+		p = p[:toRead]
+	}
+	n, err = mbr.rdr.Read(p)
+	if err == io.EOF {
+		mbr.sawEOF = true
+	}
+	if mbr.remaining == 0 {
+		// If we had zero bytes to read remaining (but hadn't seen EOF)
+		// and we get a byte here, that means we went over our limit.
+		if n > 0 {
+			return mbr.tooLarge()
+		}
+		return 0, err
+	}
+	mbr.remaining -= int64(n)
+	if mbr.remaining < 0 {
+		mbr.remaining = 0
+	}
+	return
+}
+
+func (mbr *maxBytesReader) Close() error {
+	return mbr.rdr.Close()
+}
+
+func (c Client) WithRequestSizeLimit(next func(*gin.Context), limit int64) gin.HandlerFunc {
+	return func(g *gin.Context) {
+		// set body reader
+		g.Request.Body = &maxBytesReader{
+			ctx:        g,
+			rdr:        g.Request.Body,
+			remaining:  limit,
+			wasAborted: false,
+			sawEOF:     false,
+		}
+
+		// call handler
+		next(g)
 	}
 }
