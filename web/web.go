@@ -48,7 +48,7 @@ func New(c *Config, uploadDirectory string) *Client {
 func (c *Client) SetHandlers(r *gin.Engine) {
 	// core
 	r.GET("/load/:hash/:filename", c.WithErrorResponse(c.Load))
-	r.GET("/save/:hash/:filename", c.WithErrorResponse(c.Save))
+	r.POST("/save/:hash/:filename", c.WithErrorResponse(c.Save))
 }
 
 func (c *Client) Logger() gin.HandlerFunc {
