@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"github.com/Cloudbox/crs/util"
 	"github.com/gin-gonic/gin"
@@ -12,9 +13,18 @@ import (
 
 func (c *Client) Save(g *gin.Context) {
 	// parse query
-	b := new(fileRequest)
+	b := new(struct {
+		fileRequest
+		ContentLength int64 `header:"content-length"" binding:"required"`
+	})
+
 	if err := g.ShouldBindUri(b); err != nil {
 		g.AbortWithError(http.StatusBadRequest, fmt.Errorf("bind uri: %w", err))
+		return
+	}
+
+	if err := g.ShouldBindHeader(b); err != nil {
+		g.AbortWithError(http.StatusBadRequest, fmt.Errorf("bind header: %w", err))
 		return
 	}
 
@@ -26,6 +36,11 @@ func (c *Client) Save(g *gin.Context) {
 	// validate request
 	if !util.StringListContains(c.allowedFiles, b.Filename) {
 		g.AbortWithError(http.StatusBadRequest, fmt.Errorf("file unsupported: %v", b.Filename))
+		return
+	}
+
+	if b.ContentLength > (c.maxFileSize*1024)+100 {
+		g.AbortWithError(http.StatusRequestEntityTooLarge, errors.New("file validate: request body too large"))
 		return
 	}
 
@@ -52,7 +67,7 @@ func (c *Client) Save(g *gin.Context) {
 
 	// save file
 	if err = g.SaveUploadedFile(file, b.Filepath); err != nil {
-		g.AbortWithError(http.StatusInternalServerError, fmt.Errorf("file save: %w", err))
+		g.AbortWithError(http.StatusRequestEntityTooLarge, fmt.Errorf("file save: %w", err))
 		return
 	}
 
